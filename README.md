@@ -1,4 +1,4 @@
-# Abla Etonam MENSAH (Paméla) - V5 + Admin
+# Abla Etonam MENSAH (Paméla) - V1 + Admin
 
 ## Lancer
 npm install

@@ -211,13 +211,27 @@ export default function App() {
 
   useEffect(() => {
     if (!isAdminView) return;
-    const existing = loadLeads();
-    if (existing.length === 0) {
+
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw === null) {
       setLeads(DEMO_LEADS);
       saveLeads(DEMO_LEADS);
-    } else {
-      setLeads(existing);
-      (window as any).__ABLA_DB__ = existing;
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const existing = parsed as Lead[];
+        setLeads(existing);
+        (window as any).__ABLA_DB__ = existing;
+      } else {
+        setLeads([]);
+        saveLeads([]);
+      }
+    } catch {
+      setLeads([]);
+      saveLeads([]);
     }
   }, [isAdminView]);
 

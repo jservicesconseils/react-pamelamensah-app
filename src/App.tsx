@@ -193,6 +193,27 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState<Lead | null>(null);
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteError, setDeleteError] = useState("");
+  const syncChannelRef = useRef<BroadcastChannel | null>(null);
+
+  const refreshFromStorage = () => {
+    if (typeof window === "undefined") return;
+    const nextLeads = loadLeads();
+    const nextStats = loadVisitorStats();
+    setLeads(nextLeads);
+    setVisitorStats(nextStats);
+    (window as any).__ABLA_DB__ = nextLeads;
+  };
+
+  const persistLeads = (nextLeads: Lead[]) => {
+    if (typeof window === "undefined") return;
+    saveLeads(nextLeads);
+    setLeads(nextLeads);
+    (window as any).__ABLA_DB__ = nextLeads;
+    window.dispatchEvent(new CustomEvent("abla:db-changed", { detail: { key: STORAGE_KEY } }));
+    if (syncChannelRef.current) {
+      syncChannelRef.current.postMessage({ type: "db-change", key: STORAGE_KEY });
+    }
+  };
 
   useEffect(() => {
     const check = () => {
@@ -219,18 +240,43 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
     const handleStorage = (event: StorageEvent) => {
       if (event.storageArea !== window.localStorage) return;
-      if (event.key === STORAGE_KEY && isAdminView) {
-        setLeads(loadLeads());
+      if (event.key === STORAGE_KEY) {
+        refreshFromStorage();
       }
       if (event.key === VISITOR_STATS_KEY) {
         setVisitorStats(loadVisitorStats());
       }
     };
+
+    const handleSyncEvent = () => refreshFromStorage();
+
     window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
-  }, [isAdminView]);
+    window.addEventListener("abla:db-changed", handleSyncEvent as EventListener);
+    window.addEventListener("focus", handleSyncEvent);
+    window.addEventListener("pageshow", handleSyncEvent);
+
+    if ("BroadcastChannel" in window) {
+      const channel = new BroadcastChannel("abla-sync");
+      channel.onmessage = (event: MessageEvent) => {
+        if (event.data?.type === "db-change" && event.data?.key === STORAGE_KEY) {
+          refreshFromStorage();
+        }
+      };
+      syncChannelRef.current = channel;
+    }
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("abla:db-changed", handleSyncEvent as EventListener);
+      window.removeEventListener("focus", handleSyncEvent);
+      window.removeEventListener("pageshow", handleSyncEvent);
+      syncChannelRef.current?.close();
+      syncChannelRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isAdminView) return;
@@ -286,7 +332,7 @@ export default function App() {
     };
     const current = loadLeads();
     const updated = [...current, newLead];
-    saveLeads(updated);
+    persistLeads(updated);
     setSent(true);
     setToast(`Reçu ! ${updated.length} demandes au total`);
     setTimeout(() => setToast(null), 3500);
@@ -296,7 +342,7 @@ export default function App() {
   const updateLeads = (updater: (prev: Lead[]) => Lead[]) => {
     setLeads((prev) => {
       const next = updater(prev);
-      saveLeads(next);
+      persistLeads(next);
       return next;
     });
   };
@@ -379,8 +425,7 @@ export default function App() {
         const valid = parsed.filter((x: any) => x.name && x.email) as Lead[];
         if (valid.length === 0) throw new Error("Aucune donnée valide");
         if (confirm(`Importer ${valid.length} entrées ? Cela remplacera la base actuelle.`)) {
-          setLeads(valid);
-          saveLeads(valid);
+          persistLeads(valid);
           setToast(`${valid.length} entrées importées`);
           setTimeout(() => setToast(null), 2500);
         }
@@ -411,8 +456,7 @@ export default function App() {
     if (deleteTarget) {
       updateLeads((prev) => prev.filter((x) => x.id !== deleteTarget.id));
     } else {
-      setLeads([]);
-      saveLeads([]);
+      persistLeads([]);
       const resetStats: VisitorStats = { total: 0, perDay: {} };
       saveVisitorStats(resetStats);
       setVisitorStats(resetStats);

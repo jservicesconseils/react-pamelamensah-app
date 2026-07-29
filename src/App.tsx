@@ -218,6 +218,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleStorage = (event: StorageEvent) => {
+      if (event.storageArea !== window.localStorage) return;
+      if (event.key === STORAGE_KEY && isAdminView) {
+        setLeads(loadLeads());
+      }
+      if (event.key === VISITOR_STATS_KEY) {
+        setVisitorStats(loadVisitorStats());
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [isAdminView]);
+
+  useEffect(() => {
     if (!isAdminView) return;
 
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -909,10 +924,6 @@ export default function App() {
 
       {/* A PROPOS - WHITE WITH ORANGE PEPS */}
       <section id="apropos" className="relative bg-white overflow-hidden">
-        {/* faint orange blobs */}
-        <div className="pointer-events-none absolute -top-20 right-0 w-[600px] h-[600px] rounded-full bg-gradient-to-br from-[#FF5A1F]/[0.08] to-[#FFC93C]/[0.12] blur-[40px]" />
-        <div className="pointer-events-none absolute top-[30%] left-[10%] w-[180px] h-[4px] bg-[#FFC93C] rotate-12 rounded-full opacity-80" />
-
         <div className="relative mx-auto max-w-[1280px] px-6 md:px-10 py-12 md:py-24">
           <div className="rounded-[36px] bg-white border border-black/[0.06] shadow-[0_24px_80px_rgba(10,25,49,0.08)] overflow-hidden grid lg:grid-cols-[0.9fr_1.1fr] max-w-full">
             <div className="relative bg-[#0A1931] text-white p-10 md:p-14 flex flex-col justify-between min-h-[460px] overflow-hidden">
@@ -939,11 +950,11 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <div className="relative mt-8 flex flex-wrap gap-3">
+              <p className="mt-5 max-w-[40ch] text-[14px] leading-[1.7] text-white/70">Disponible pour un accompagnement sécurisé et clair, je vous aide à comprendre vos besoins et à choisir des solutions qui vous ressemblent.</p>
+              <div className="mt-6 flex flex-wrap gap-3">
                 <div className="rounded-full bg-white/10 border border-white/10 px-4 py-2 text-[11px] tracking-wide font-semibold backdrop-blur">Québec · 100% virtuel</div>
                 <div className="rounded-full bg-[#FF5A1F] px-4 py-2 text-[11px] tracking-wide font-bold">Humain · Pédagogie</div>
               </div>
-              <div className="pointer-events-none absolute -right-20 -bottom-20 w-[340px] h-[340px] rounded-full bg-gradient-to-br from-[#FF5A1F] to-[#FFC93C] blur-[10px] opacity-90" />
             </div>
             <div className="p-8 md:p-14 relative">
               {/* citation deco */}

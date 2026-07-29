@@ -47,6 +47,7 @@ type Lead = {
 };
 
 const STORAGE_KEY = "abla_leads_db";
+const VISITOR_STATS_KEY = "abla_visitor_stats";
 const NEEDS_LIST = [
   "Assurance vie",
   "Assurance invalidité",
@@ -120,6 +121,43 @@ function saveLeads(leads: Lead[]) {
   (window as any).__ABLA_DB__ = leads;
 }
 
+type VisitorStats = {
+  total: number;
+  perDay: Record<string, number>;
+};
+
+function loadVisitorStats(): VisitorStats {
+  if (typeof window === "undefined") return { total: 0, perDay: {} };
+  try {
+    const raw = localStorage.getItem(VISITOR_STATS_KEY);
+    if (!raw) return { total: 0, perDay: {} };
+    const parsed = JSON.parse(raw);
+    return {
+      total: typeof parsed?.total === "number" ? parsed.total : 0,
+      perDay: parsed?.perDay && typeof parsed.perDay === "object" ? parsed.perDay : {},
+    };
+  } catch {
+    return { total: 0, perDay: {} };
+  }
+}
+
+function saveVisitorStats(stats: VisitorStats) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(VISITOR_STATS_KEY, JSON.stringify(stats));
+}
+
+function trackVisit(): VisitorStats {
+  if (typeof window === "undefined") return { total: 0, perDay: {} };
+  const today = new Date().toISOString().slice(0, 10);
+  const stats = loadVisitorStats();
+  const nextStats: VisitorStats = {
+    total: stats.total + 1,
+    perDay: { ...stats.perDay, [today]: (stats.perDay[today] || 0) + 1 },
+  };
+  saveVisitorStats(nextStats);
+  return nextStats;
+}
+
 export default function App() {
   const [form, setForm] = useState({
     name: "",
@@ -142,6 +180,7 @@ export default function App() {
   const [loginInput, setLoginInput] = useState("");
   const [loginError, setLoginError] = useState("");
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [visitorStats, setVisitorStats] = useState<VisitorStats>({ total: 0, perDay: {} });
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Lead | null>(null);
   const [deletePassword, setDeletePassword] = useState("");
@@ -164,6 +203,10 @@ export default function App() {
       window.removeEventListener("hashchange", check);
       window.removeEventListener("popstate", check);
     };
+  }, []);
+
+  useEffect(() => {
+    setVisitorStats(trackVisit());
   }, []);
 
   useEffect(() => {
@@ -426,7 +469,7 @@ export default function App() {
           </div>
         </header>
         <main className="mx-auto max-w-[1280px] px-6 md:px-8 py-8">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
             <div className="rounded-[20px] bg-white border border-black/[0.06] p-5 shadow-[0_12px_32px_rgba(10,25,49,0.06)]">
               <div className="flex items-center justify-between"><span className="text-[11px] tracking-[0.14em] uppercase font-bold text-black/50">Total messages</span><div className="w-8 h-8 rounded-full bg-[#0A1931] grid place-items-center"><Users className="w-4 h-4 text-white" /></div></div>
               <div className="mt-3 serif text-[32px] font-bold leading-none">{stats.total}</div>
@@ -446,6 +489,16 @@ export default function App() {
               <div className="flex items-center justify-between"><span className="text-[11px] tracking-[0.14em] uppercase font-bold text-[#FF5A1F]">Nouveaux</span><div className="w-8 h-8 rounded-full bg-[#FF5A1F] grid place-items-center"><Sparkles className="w-4 h-4 text-white" /></div></div>
               <div className="mt-3 serif text-[32px] font-bold leading-none text-[#FF5A1F]">{stats.nouveaux}</div>
               <div className="mt-2 text-[12px] text-black/50 font-medium">À traiter en priorité</div>
+            </div>
+            <div className="rounded-[20px] bg-white border border-black/[0.06] p-5 shadow-[0_12px_32px_rgba(10,25,49,0.06)]">
+              <div className="flex items-center justify-between"><span className="text-[11px] tracking-[0.14em] uppercase font-bold text-black/50">Visiteurs total</span><div className="w-8 h-8 rounded-full bg-[#0E4D45] grid place-items-center"><Activity className="w-4 h-4 text-white" /></div></div>
+              <div className="mt-3 serif text-[32px] font-bold leading-none">{visitorStats.total}</div>
+              <div className="mt-2 text-[12px] text-black/50 font-medium">Visites enregistrées sur la page</div>
+            </div>
+            <div className="rounded-[20px] bg-white border border-black/[0.06] p-5 shadow-[0_12px_32px_rgba(10,25,49,0.06)]">
+              <div className="flex items-center justify-between"><span className="text-[11px] tracking-[0.14em] uppercase font-bold text-black/50">Visiteurs aujourd’hui</span><div className="w-8 h-8 rounded-full bg-[#16A34A] grid place-items-center"><Calendar className="w-4 h-4 text-white" /></div></div>
+              <div className="mt-3 serif text-[32px] font-bold leading-none">{visitorStats.perDay[new Date().toISOString().slice(0, 10)] || 0}</div>
+              <div className="mt-2 text-[12px] text-black/50 font-medium">Pour la journée en cours</div>
             </div>
           </div>
           <div className="mt-6 grid lg:grid-cols-[1.1fr_0.9fr] gap-6">

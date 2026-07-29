@@ -218,7 +218,7 @@ export default function App() {
   useEffect(() => {
     const check = () => {
       if (typeof window === "undefined") return;
-      const pathAdmin = window.location.pathname === "/admin";
+      const pathAdmin = window.location.pathname === "/admin" || window.location.pathname === "/admin/";
       const hashAdmin = window.location.hash === "#admin";
       const searchAdmin = new URLSearchParams(window.location.search).has("admin");
       setIsAdminView(pathAdmin || hashAdmin || searchAdmin);
@@ -257,6 +257,7 @@ export default function App() {
     window.addEventListener("abla:db-changed", handleSyncEvent as EventListener);
     window.addEventListener("focus", handleSyncEvent);
     window.addEventListener("pageshow", handleSyncEvent);
+    document.addEventListener("visibilitychange", handleSyncEvent);
 
     if ("BroadcastChannel" in window) {
       const channel = new BroadcastChannel("abla-sync");
@@ -273,6 +274,7 @@ export default function App() {
       window.removeEventListener("abla:db-changed", handleSyncEvent as EventListener);
       window.removeEventListener("focus", handleSyncEvent);
       window.removeEventListener("pageshow", handleSyncEvent);
+      document.removeEventListener("visibilitychange", handleSyncEvent);
       syncChannelRef.current?.close();
       syncChannelRef.current = null;
     };

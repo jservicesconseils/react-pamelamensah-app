@@ -390,6 +390,9 @@ export default function App() {
     } else {
       setLeads([]);
       saveLeads([]);
+      const resetStats: VisitorStats = { total: 0, perDay: {} };
+      saveVisitorStats(resetStats);
+      setVisitorStats(resetStats);
       setToast("Base vidée");
       setTimeout(() => setToast(null), 2000);
     }

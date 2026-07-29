@@ -13,10 +13,8 @@ import {
   HandHeart,
   Check,
   Sparkles,
-  Zap,
   Star,
   Search,
-  Download,
   Upload,
   Trash2,
   Eye as EyeIcon,
@@ -34,20 +32,22 @@ import {
   Phone,
 } from "lucide-react";
 
-type LeadStatus = "nouveau" | "lu" | "contacté";
-type Lead = {
-  id: number;
-  date: string;
-  name: string;
-  email: string;
-  phone: string;
-  need: string;
-  message: string;
-  status: LeadStatus;
-};
+import { supabase, isSupabaseConfigured, supabaseConfigError } from "./lib/supabase";
+import {
+  fetchLeads,
+  insertLead,
+  updateLeadStatus,
+  deleteLead,
+  deleteAllLeads,
+  deleteAllVisits,
+  bulkInsertLeads,
+  trackVisit,
+  fetchVisitorStats,
+  subscribeToLeads,
+  todayLocalKey,
+} from "./lib/leads";
+import type { Lead, LeadStatus, NewLead, VisitorStats } from "./lib/leads";
 
-const STORAGE_KEY = "abla_leads_db";
-const VISITOR_STATS_KEY = "abla_visitor_stats";
 const NEEDS_LIST = [
   "Assurance vie",
   "Assurance invalidité",
@@ -70,100 +70,24 @@ const NEED_BAR: Record<string, string> = {
   "Bilan complet": "bg-[#16A34A]",
 };
 
-const DEMO_LEADS: Lead[] = [
-  {
-    id: 1715600000000,
-    date: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
-    name: "Marie Tremblay",
-    email: "marie.tremblay@email.com",
-    phone: "(514) 555-0142",
-    need: "Assurance vie",
-    message: "Bonjour Paméla, je viens d'avoir mon deuxième enfant et je veux m'assurer que ma famille serait protégée. J'aimerais un échange pour comprendre les options.",
-    status: "nouveau",
-  },
-  {
-    id: 1715600000001,
-    date: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(),
-    name: "Jean-Philippe Roy",
-    email: "jp.roy@exemple.ca",
-    phone: "(438) 555-0291",
-    need: "Épargne et REER",
-    message: "Travailleur autonome depuis 3 ans, je n'ai pas encore de REER. Besoin d'aide pour optimiser.",
-    status: "lu",
-  },
-  {
-    id: 1715600000002,
-    date: new Date(Date.now() - 1000 * 60 * 60 * 72).toISOString(),
-    name: "Sophie Lavoie",
-    email: "sophie.lavoie@email.com",
-    phone: "(514) 555-0384",
-    need: "Assurance maladies graves",
-    message: "J'ai vu votre approche sans pression, ça m'a parlé. Je veux comparer les protections maladies graves.",
-    status: "contacté",
-  },
-];
-
-function loadLeads(): Lead[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed as Lead[];
-    return [];
-  } catch {
-    return [];
-  }
-}
-function saveLeads(leads: Lead[]) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(leads));
-  (window as any).__ABLA_DB__ = leads;
-}
-
-type VisitorStats = {
-  total: number;
-  perDay: Record<string, number>;
-};
-
-function loadVisitorStats(): VisitorStats {
-  if (typeof window === "undefined") return { total: 0, perDay: {} };
-  try {
-    const raw = localStorage.getItem(VISITOR_STATS_KEY);
-    if (!raw) return { total: 0, perDay: {} };
-    const parsed = JSON.parse(raw);
-    return {
-      total: typeof parsed?.total === "number" ? parsed.total : 0,
-      perDay: parsed?.perDay && typeof parsed.perDay === "object" ? parsed.perDay : {},
-    };
-  } catch {
-    return { total: 0, perDay: {} };
-  }
-}
-
-function saveVisitorStats(stats: VisitorStats) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(VISITOR_STATS_KEY, JSON.stringify(stats));
-}
-
-let hasTrackedVisit = false;
-
-function trackVisit(): VisitorStats {
-  if (typeof window === "undefined") return { total: 0, perDay: {} };
-
-  if (hasTrackedVisit) {
-    return loadVisitorStats();
-  }
-
-  hasTrackedVisit = true;
-  const today = new Date().toISOString().slice(0, 10);
-  const stats = loadVisitorStats();
-  const nextStats: VisitorStats = {
-    total: stats.total + 1,
-    perDay: { ...stats.perDay, [today]: (stats.perDay[today] || 0) + 1 },
-  };
-  saveVisitorStats(nextStats);
-  return nextStats;
+/**
+ * Lit l'URL pour savoir si on est sur le tableau de bord.
+ *
+ * Doit être appelée dès le premier rendu, pas dans un effet : les effets d'un
+ * même commit voient tous l'ancien état. Si `isAdminView` ne devenait vrai
+ * qu'au rendu suivant, l'effet de comptage des visites tournerait encore avec
+ * `false` et enregistrerait une visite chaque fois qu'Abla ouvre son propre
+ * tableau de bord.
+ */
+function detectAdminView(): boolean {
+  if (typeof window === "undefined") return false;
+  const { pathname, hash, search } = window.location;
+  return (
+    pathname === "/admin" ||
+    pathname === "/admin/" ||
+    hash === "#admin" ||
+    new URLSearchParams(search).has("admin")
+  );
 }
 
 export default function App() {
@@ -178,54 +102,48 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<string>("hero");
   const [toast, setToast] = useState<string | null>(null);
 
-  const [isAdminView, setIsAdminView] = useState(false);
+  const [isAdminView, setIsAdminView] = useState(detectAdminView);
   const [adminAuthed, setAdminAuthed] = useState(false);
   const [search, setSearch] = useState("");
   const [filterNeed, setFilterNeed] = useState<string>("Tous");
   const [filterStatus, setFilterStatus] = useState<string>("Tous");
   const [viewLead, setViewLead] = useState<Lead | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [loginInput, setLoginInput] = useState("");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [visitorStats, setVisitorStats] = useState<VisitorStats>({ total: 0, perDay: {} });
+  const [dataError, setDataError] = useState<string | null>(null);
+  const [loadingLeads, setLoadingLeads] = useState(false);
+  const [sending, setSending] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Lead | null>(null);
-  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteConfirm, setDeleteConfirm] = useState("");
   const [deleteError, setDeleteError] = useState("");
-  const syncChannelRef = useRef<BroadcastChannel | null>(null);
 
-  const refreshFromStorage = () => {
-    if (typeof window === "undefined") return;
-    const nextLeads = loadLeads();
-    const nextStats = loadVisitorStats();
-    setLeads(nextLeads);
-    setVisitorStats(nextStats);
-    (window as any).__ABLA_DB__ = nextLeads;
+  const flash = (message: string, ms = 2500) => {
+    setToast(message);
+    setTimeout(() => setToast(null), ms);
   };
 
-  const persistLeads = (nextLeads: Lead[]) => {
-    if (typeof window === "undefined") return;
-    saveLeads(nextLeads);
-    setLeads(nextLeads);
-    (window as any).__ABLA_DB__ = nextLeads;
-    window.dispatchEvent(new CustomEvent("abla:db-changed", { detail: { key: STORAGE_KEY } }));
-    if (syncChannelRef.current) {
-      syncChannelRef.current.postMessage({ type: "db-change", key: STORAGE_KEY });
+  /** Recharge leads + stats depuis Supabase. Nécessite une session active. */
+  const refreshFromServer = async () => {
+    try {
+      const [nextLeads, nextStats] = await Promise.all([fetchLeads(), fetchVisitorStats()]);
+      setLeads(nextLeads);
+      setVisitorStats(nextStats);
+      setDataError(null);
+    } catch (err: any) {
+      setDataError(err?.message ?? "Impossible de charger les données.");
     }
   };
 
+  // La valeur initiale vient déjà de detectAdminView() ci-dessus ; cet effet ne
+  // sert qu'à suivre les changements d'URL après le premier rendu.
   useEffect(() => {
-    const check = () => {
-      if (typeof window === "undefined") return;
-      const pathAdmin = window.location.pathname === "/admin" || window.location.pathname === "/admin/";
-      const hashAdmin = window.location.hash === "#admin";
-      const searchAdmin = new URLSearchParams(window.location.search).has("admin");
-      setIsAdminView(pathAdmin || hashAdmin || searchAdmin);
-      const sess = sessionStorage.getItem("abla_admin_auth");
-      setAdminAuthed(sess === "1");
-    };
-    check();
+    const check = () => setIsAdminView(detectAdminView());
     window.addEventListener("hashchange", check);
     window.addEventListener("popstate", check);
     return () => {
@@ -234,77 +152,49 @@ export default function App() {
     };
   }, []);
 
+  // L'accès admin dépend d'une session Supabase vérifiée côté serveur : écrire
+  // dans sessionStorage depuis la console n'ouvre plus rien.
   useEffect(() => {
-    setVisitorStats(trackVisit());
-  }, []);
+    if (!isSupabaseConfigured) return;
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+    supabase.auth.getSession().then(({ data }) => {
+      setAdminAuthed(Boolean(data.session));
+    });
 
-    const handleStorage = (event: StorageEvent) => {
-      if (event.storageArea !== window.localStorage) return;
-      if (event.key === STORAGE_KEY) {
-        refreshFromStorage();
-      }
-      if (event.key === VISITOR_STATS_KEY) {
-        setVisitorStats(loadVisitorStats());
-      }
-    };
-
-    const handleSyncEvent = () => refreshFromStorage();
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener("abla:db-changed", handleSyncEvent as EventListener);
-    window.addEventListener("focus", handleSyncEvent);
-    window.addEventListener("pageshow", handleSyncEvent);
-    document.addEventListener("visibilitychange", handleSyncEvent);
-
-    if ("BroadcastChannel" in window) {
-      const channel = new BroadcastChannel("abla-sync");
-      channel.onmessage = (event: MessageEvent) => {
-        if (event.data?.type === "db-change" && event.data?.key === STORAGE_KEY) {
-          refreshFromStorage();
-        }
-      };
-      syncChannelRef.current = channel;
-    }
-
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener("abla:db-changed", handleSyncEvent as EventListener);
-      window.removeEventListener("focus", handleSyncEvent);
-      window.removeEventListener("pageshow", handleSyncEvent);
-      document.removeEventListener("visibilitychange", handleSyncEvent);
-      syncChannelRef.current?.close();
-      syncChannelRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isAdminView) return;
-
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === null) {
-      setLeads(DEMO_LEADS);
-      saveLeads(DEMO_LEADS);
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        const existing = parsed as Lead[];
-        setLeads(existing);
-        (window as any).__ABLA_DB__ = existing;
-      } else {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAdminAuthed(Boolean(session));
+      if (!session) {
         setLeads([]);
-        saveLeads([]);
+        setVisitorStats({ total: 0, perDay: {} });
       }
-    } catch {
-      setLeads([]);
-      saveLeads([]);
-    }
+    });
+
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // Une visite par session, comptée côté serveur. On n'enregistre pas les
+  // passages d'Abla dans son propre tableau de bord.
+  useEffect(() => {
+    if (!isSupabaseConfigured || isAdminView) return;
+    void trackVisit();
   }, [isAdminView]);
+
+  // Chargement initial des données une fois authentifiée.
+  useEffect(() => {
+    if (!isAdminView || !adminAuthed || !isSupabaseConfigured) return;
+    setLoadingLeads(true);
+    void refreshFromServer().finally(() => setLoadingLeads(false));
+  }, [isAdminView, adminAuthed]);
+
+  // Synchronisation temps réel entre appareils. C'est ce qui fait qu'une
+  // soumission depuis un téléphone apparaît ici sans rechargement — l'ancienne
+  // synchro (storage / BroadcastChannel) ne franchissait jamais un navigateur.
+  useEffect(() => {
+    if (!isAdminView || !adminAuthed || !isSupabaseConfigured) return;
+    return subscribeToLeads(() => {
+      void refreshFromServer();
+    });
+  }, [isAdminView, adminAuthed]);
 
   const scrollTo = (id: string) => {
     setActiveSection(id);
@@ -320,33 +210,48 @@ export default function App() {
     setTimeout(() => setToast(null), 1800);
   };
 
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newLead: Lead = {
-      id: Date.now(),
-      date: new Date().toISOString(),
+    if (sending) return;
+
+    if (!isSupabaseConfigured) {
+      flash("Le formulaire n'est pas configuré. Contactez l'administrateur.", 5000);
+      return;
+    }
+
+    const newLead: NewLead = {
       name: form.name.trim(),
       email: form.email.trim(),
       phone: form.phone.trim(),
       need: form.need,
       message: form.message.trim(),
-      status: "nouveau",
     };
-    const current = loadLeads();
-    const updated = [...current, newLead];
-    persistLeads(updated);
-    setSent(true);
-    setToast(`Reçu ! ${updated.length} demandes au total`);
-    setTimeout(() => setToast(null), 3500);
-    setForm({ name: "", email: "", phone: "", need: "", message: "" });
+
+    setSending(true);
+    try {
+      await insertLead(newLead);
+      setSent(true);
+      flash("Message envoyé. Abla vous répond sous 24 h.", 3500);
+      setForm({ name: "", email: "", phone: "", need: "", message: "" });
+    } catch (err: any) {
+      // Ne jamais afficher « Reçu ! » si l'envoi a échoué : le visiteur croirait
+      // à tort que sa demande est partie.
+      flash(`Envoi impossible : ${err?.message ?? "erreur réseau"}. Réessayez.`, 6000);
+    } finally {
+      setSending(false);
+    }
   };
 
-  const updateLeads = (updater: (prev: Lead[]) => Lead[]) => {
-    setLeads((prev) => {
-      const next = updater(prev);
-      persistLeads(next);
-      return next;
-    });
+  /** Change le statut d'un lead : mise à jour optimiste, annulée si le serveur refuse. */
+  const changeStatus = async (id: string, status: LeadStatus) => {
+    const previous = leads;
+    setLeads((prev) => prev.map((x) => (x.id === id ? { ...x, status } : x)));
+    try {
+      await updateLeadStatus(id, status);
+    } catch (err: any) {
+      setLeads(previous);
+      flash(`Mise à jour impossible : ${err?.message ?? "erreur réseau"}`, 4000);
+    }
   };
   const stats = useMemo(() => {
     const total = leads.length;
@@ -420,19 +325,29 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const parsed = JSON.parse(String(reader.result));
         if (!Array.isArray(parsed)) throw new Error("Format invalide");
-        const valid = parsed.filter((x: any) => x.name && x.email) as Lead[];
+        const valid = parsed
+          .filter((x: any) => x.name && x.email)
+          .map((x: any) => ({
+            name: String(x.name),
+            email: String(x.email),
+            phone: String(x.phone ?? ""),
+            need: String(x.need ?? ""),
+            message: String(x.message ?? ""),
+          })) as NewLead[];
         if (valid.length === 0) throw new Error("Aucune donnée valide");
-        if (confirm(`Importer ${valid.length} entrées ? Cela remplacera la base actuelle.`)) {
-          persistLeads(valid);
-          setToast(`${valid.length} entrées importées`);
-          setTimeout(() => setToast(null), 2500);
+        // L'import ajoute à la base au lieu de la remplacer : on ne détruit plus
+        // les leads existants par accident.
+        if (confirm(`Ajouter ${valid.length} entrées à la base ?`)) {
+          await bulkInsertLeads(valid);
+          await refreshFromServer();
+          flash(`${valid.length} entrées importées`);
         }
       } catch (err: any) {
-        alert("Erreur import: " + err.message);
+        alert("Erreur import : " + err.message);
       }
     };
     reader.readAsText(file);
@@ -440,36 +355,68 @@ export default function App() {
   };
   const openDeleteModal = (lead?: Lead) => {
     setDeleteTarget(lead ?? null);
-    setDeletePassword("");
+    setDeleteConfirm("");
     setDeleteError("");
     setShowDeleteModal(true);
   };
   const clearDB = () => {
     openDeleteModal();
   };
-  const confirmDelete = (e: React.FormEvent) => {
+  const confirmDelete = async (e: React.FormEvent) => {
     e.preventDefault();
-    const v = deletePassword.trim();
-    if (v !== "p@mel@") {
-      setDeleteError("Code incorrect. Essayez p@mel@");
+
+    // Plus de mot de passe en dur : être authentifiée suffit. Pour la purge
+    // totale, on exige un mot tapé à la main comme garde-fou.
+    if (!deleteTarget && deleteConfirm.trim().toUpperCase() !== "SUPPRIMER") {
+      setDeleteError("Tapez SUPPRIMER en majuscules pour confirmer.");
       return;
     }
 
-    if (deleteTarget) {
-      updateLeads((prev) => prev.filter((x) => x.id !== deleteTarget.id));
-    } else {
-      persistLeads([]);
-      const resetStats: VisitorStats = { total: 0, perDay: {} };
-      saveVisitorStats(resetStats);
-      setVisitorStats(resetStats);
-      setToast("Base vidée");
-      setTimeout(() => setToast(null), 2000);
+    try {
+      if (deleteTarget) {
+        await deleteLead(deleteTarget.id);
+        setLeads((prev) => prev.filter((x) => x.id !== deleteTarget.id));
+        flash("Lead supprimé");
+      } else {
+        // La purge efface les leads ET le compteur de visites, comme l'annonce
+        // la modale.
+        await Promise.all([deleteAllLeads(), deleteAllVisits()]);
+        setLeads([]);
+        setVisitorStats({ total: 0, perDay: {} });
+        flash("Base vidée");
+      }
+    } catch (err: any) {
+      setDeleteError(err?.message ?? "Suppression impossible.");
+      return;
     }
 
-    setDeletePassword("");
+    setDeleteConfirm("");
     setDeleteError("");
     setShowDeleteModal(false);
     setDeleteTarget(null);
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loginBusy) return;
+    setLoginBusy(true);
+    setLoginError("");
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginEmail.trim(),
+      password: loginPassword,
+    });
+    setLoginBusy(false);
+    if (error) {
+      // Message volontairement générique : ne pas révéler si le compte existe.
+      setLoginError("Courriel ou mot de passe invalide.");
+      return;
+    }
+    setLoginPassword("");
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setAdminAuthed(false);
   };
 
   if (isAdminView) {
@@ -490,26 +437,41 @@ export default function App() {
               <img src={headshot} alt="" className="w-12 h-12 rounded-full object-cover border-2 border-white shadow" />
               <div className="text-[13px] leading-[1.5]">
                 <div className="font-bold text-[#0A1931]">Abla Etonam MENSAH (Paméla)</div>
-                <div className="text-black/60">Entrez le code d'accès pour ouvrir le tableau de bord. Fichier local: abla_leads_db.json</div>
+                <div className="text-black/60">Connectez-vous avec votre courriel pour ouvrir le tableau de bord.</div>
               </div>
             </div>
-            <form onSubmit={(e)=>{
-              e.preventDefault();
-              const v = loginInput.trim();
-              if(v==="p@mel@"){
-                sessionStorage.setItem("abla_admin_auth","1");
-                setAdminAuthed(true);
-              } else {
-                setLoginError("Code incorrect. Essayez p@mel@");
-              }
-            }} className="space-y-4">
+            {!isSupabaseConfigured ? (
+              <div className="rounded-[14px] bg-red-50 border border-red-200 p-4 text-[12.5px] leading-[1.6] text-red-700 font-medium">
+                {supabaseConfigError}
+              </div>
+            ) : (
+            <form onSubmit={handleLogin} className="space-y-4">
               <label className="block">
-                <span className="text-[12.5px] font-bold text-[#0A1931]">Code d'accès</span>
-                <input value={loginInput} onChange={e=>{setLoginInput(e.target.value); setLoginError("")}} placeholder="2024" className="mt-2 w-full h-[52px] rounded-[14px] bg-[#FFF8F0] border-2 border-black/[0.06] px-4 text-[14px] font-medium outline-none focus:border-[#FF5A1F]/40 focus:ring-2 focus:ring-[#FF5A1F]/20" />
+                <span className="text-[12.5px] font-bold text-[#0A1931]">Courriel</span>
+                <input
+                  type="email"
+                  autoComplete="username"
+                  required
+                  value={loginEmail}
+                  onChange={e=>{setLoginEmail(e.target.value); setLoginError("")}}
+                  className="mt-2 w-full h-[52px] rounded-[14px] bg-[#FFF8F0] border-2 border-black/[0.06] px-4 text-[14px] font-medium outline-none focus:border-[#FF5A1F]/40 focus:ring-2 focus:ring-[#FF5A1F]/20"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[12.5px] font-bold text-[#0A1931]">Mot de passe</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={loginPassword}
+                  onChange={e=>{setLoginPassword(e.target.value); setLoginError("")}}
+                  className="mt-2 w-full h-[52px] rounded-[14px] bg-[#FFF8F0] border-2 border-black/[0.06] px-4 text-[14px] font-medium outline-none focus:border-[#FF5A1F]/40 focus:ring-2 focus:ring-[#FF5A1F]/20"
+                />
                 {loginError && <div className="mt-2 text-[12px] text-red-600 font-medium">{loginError}</div>}
               </label>
-              <button type="submit" className="w-full h-[52px] rounded-full bg-[#FF5A1F] text-white font-bold text-[14px] hover:bg-[#e04e1a] transition flex items-center justify-center gap-2">Accéder <ArrowUpRight className="w-4 h-4" /></button>
+              <button type="submit" disabled={loginBusy} className="w-full h-[52px] rounded-full bg-[#FF5A1F] text-white font-bold text-[14px] hover:bg-[#e04e1a] transition flex items-center justify-center gap-2 disabled:opacity-60">{loginBusy ? "Connexion…" : <>Accéder <ArrowUpRight className="w-4 h-4" /></>}</button>
             </form>
+            )}
             <div className="mt-6 flex justify-between items-center">
               <button onClick={()=>{
                 const url = new URL(window.location.href);
@@ -519,7 +481,7 @@ export default function App() {
                 window.history.replaceState({}, "", url.pathname + url.search + url.hash);
                 setIsAdminView(false);
               }} className="text-[12.5px] font-semibold text-black/60 hover:text-black flex items-center gap-1.5"><LogOut className="w-4 h-4" /> Retour au site</button>
-              <span className="text-[11px] text-black/40">Stockage: localStorage {STORAGE_KEY}</span>
+              <span className="text-[11px] text-black/40">Données chiffrées · Supabase</span>
             </div>
           </div>
         </div>
@@ -537,7 +499,7 @@ export default function App() {
               <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-white/20 bg-white"><img src={headshot} alt="" className="w-full h-full object-cover" /></div>
               <div className="leading-tight">
                 <div className="serif text-[15px] md:text-[17px] font-bold tracking-tight">Tableau de bord – Abla Etonam MENSAH (Paméla)</div>
-                <div className="text-[11px] text-white/60 font-medium tracking-wide flex items-center gap-2"><Calendar className="w-3 h-3" /> {new Date().toLocaleDateString('fr-CA', { weekday:'long', year:'numeric', month:'long', day:'numeric' })} · {stats.total} leads · Fichier: abla-leads-db.json</div>
+                <div className="text-[11px] text-white/60 font-medium tracking-wide flex items-center gap-2"><Calendar className="w-3 h-3" /> {new Date().toLocaleDateString('fr-CA', { weekday:'long', year:'numeric', month:'long', day:'numeric' })} · {stats.total} leads</div>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -550,7 +512,8 @@ export default function App() {
                 if (url.pathname === "/admin") url.pathname = "/";
                 window.history.replaceState({}, "", url.pathname + url.search + url.hash);
                 setIsAdminView(false);
-              }} className="inline-flex h-10 px-5 rounded-full bg-[#FF5A1F] hover:bg-[#e04e1a] text-white text-[13px] font-bold items-center gap-2 transition"><LogOut className="w-4 h-4" /> Retour au site</button>
+              }} className="inline-flex h-10 px-5 rounded-full bg-white/10 hover:bg-white/15 border border-white/10 text-[12.5px] font-semibold items-center gap-2 transition">Retour au site</button>
+              <button onClick={()=>{void handleLogout()}} className="inline-flex h-10 px-5 rounded-full bg-[#FF5A1F] hover:bg-[#e04e1a] text-white text-[13px] font-bold items-center gap-2 transition"><LogOut className="w-4 h-4" /> Déconnexion</button>
             </div>
           </div>
         </header>
@@ -559,7 +522,7 @@ export default function App() {
             <div className="rounded-[20px] bg-white border border-black/[0.06] p-5 shadow-[0_12px_32px_rgba(10,25,49,0.06)]">
               <div className="flex items-center justify-between"><span className="text-[11px] tracking-[0.14em] uppercase font-bold text-black/50">Total messages</span><div className="w-8 h-8 rounded-full bg-[#0A1931] grid place-items-center"><Users className="w-4 h-4 text-white" /></div></div>
               <div className="mt-3 serif text-[32px] font-bold leading-none">{stats.total}</div>
-              <div className="mt-2 text-[12px] text-black/50 font-medium">Dans abla_leads_db.json</div>
+              <div className="mt-2 text-[12px] text-black/50 font-medium">Demandes reçues au total</div>
             </div>
             <div className="rounded-[20px] bg-white border border-black/[0.06] p-5 shadow-[0_12px_32px_rgba(10,25,49,0.06)]">
               <div className="flex items-center justify-between"><span className="text-[11px] tracking-[0.14em] uppercase font-bold text-black/50">Ce mois-ci</span><div className="w-8 h-8 rounded-full bg-[#FF5A1F] grid place-items-center"><TrendingUp className="w-4 h-4 text-white" /></div></div>
@@ -583,7 +546,7 @@ export default function App() {
             </div>
             <div className="rounded-[20px] bg-white border border-black/[0.06] p-5 shadow-[0_12px_32px_rgba(10,25,49,0.06)]">
               <div className="flex items-center justify-between"><span className="text-[11px] tracking-[0.14em] uppercase font-bold text-black/50">Visiteurs aujourd’hui</span><div className="w-8 h-8 rounded-full bg-[#16A34A] grid place-items-center"><Calendar className="w-4 h-4 text-white" /></div></div>
-              <div className="mt-3 serif text-[32px] font-bold leading-none">{visitorStats.perDay[new Date().toISOString().slice(0, 10)] || 0}</div>
+              <div className="mt-3 serif text-[32px] font-bold leading-none">{visitorStats.perDay[todayLocalKey()] || 0}</div>
               <div className="mt-2 text-[12px] text-black/50 font-medium">Pour la journée en cours</div>
             </div>
           </div>
@@ -614,8 +577,8 @@ export default function App() {
             <div className="rounded-[24px] bg-[#0A1931] text-white p-6 shadow-[0_16px_40px_rgba(10,25,49,0.25)] relative overflow-hidden">
               <div className="absolute -top-20 -right-20 w-80 h-80 rounded-full bg-gradient-to-br from-[#FF5A1F]/20 to-[#FFC93C]/10 blur-[30px]" />
               <div className="relative">
-                <h3 className="serif text-[18px] font-bold">Gestion fichier</h3>
-                <p className="mt-2 text-[13px] leading-[1.6] text-white/60">Votre base est stockée dans le navigateur (localStorage {STORAGE_KEY}) et accessible via window.__ABLA_DB__. Exportez régulièrement en .json pour sauvegarde fichier.</p>
+                <h3 className="serif text-[18px] font-bold">Gestion des données</h3>
+                <p className="mt-2 text-[13px] leading-[1.6] text-white/60">Votre base est hébergée sur Supabase et synchronisée en temps réel entre tous vos appareils. Les demandes reçues sur téléphone apparaissent ici automatiquement. L'export sert de copie de sauvegarde.</p>
                 <div className="mt-5 grid grid-cols-2 gap-3">
                   <button onClick={exportJSON} className="h-11 rounded-full bg-white text-[#0A1931] font-bold text-[12.5px] flex items-center justify-center gap-2 hover:bg-[#FFC93C] transition"><FileJson className="w-4 h-4" /> Exporter JSON</button>
                   <button onClick={exportCSV} className="h-11 rounded-full bg-[#FF5A1F] text-white font-bold text-[12.5px] flex items-center justify-center gap-2 hover:bg-[#ff4a0a] transition"><FileSpreadsheet className="w-4 h-4" /> Exporter CSV</button>
@@ -624,7 +587,7 @@ export default function App() {
                 </div>
                 <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
                 <div className="mt-6 rounded-[14px] bg-white/5 border border-white/10 p-3 text-[11px] text-white/60 leading-[1.5]">
-                  <span className="font-bold text-white">Fichier intégré:</span> abla-leads-db.json – contient {leads.length} entrées. Import/Export pour déplacer la base. Aucune API.
+                  <span className="font-bold text-white">Base Supabase :</span> {leads.length} entrées. L'import ajoute des entrées sans écraser les existantes.
                 </div>
               </div>
             </div>
@@ -666,7 +629,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {filteredLeads.length===0 && (
-                    <tr><td colSpan={7} className="px-5 py-16 text-center text-[14px] text-black/50">Aucun message. Votre base {STORAGE_KEY} est vide.</td></tr>
+                    <tr><td colSpan={7} className="px-5 py-16 text-center text-[14px] text-black/50">{loadingLeads ? "Chargement…" : "Aucun message pour le moment."}</td></tr>
                   )}
                   {filteredLeads.map((lead)=>{
                     return (
@@ -682,7 +645,7 @@ export default function App() {
                         <td className="px-5 py-4 text-[12.5px] font-medium"><div className="flex items-center gap-1"><Phone className="w-3 h-3 opacity-60" />{lead.phone||"—"}</div></td>
                         <td className="px-5 py-4 max-w-[260px]"><div className="text-[12.5px] leading-[1.5] line-clamp-2 text-black/70">{lead.message}</div></td>
                         <td className="px-5 py-4">
-                          <select value={lead.status} onChange={(e)=>updateLeads(prev=>prev.map(x=>x.id===lead.id?{...x,status:e.target.value as LeadStatus}:x))} className={`h-8 rounded-full px-3 text-[11.5px] font-bold border ${lead.status==='nouveau'?'bg-[#FF5A1F]/10 border-[#FF5A1F]/20 text-[#FF5A1F]': lead.status==='lu'?'bg-[#0A1931]/5 border-black/10':'bg-[#16A34A]/10 border-[#16A34A]/20 text-[#16A34A]'}`}>
+                          <select value={lead.status} onChange={(e)=>{void changeStatus(lead.id, e.target.value as LeadStatus)}} className={`h-8 rounded-full px-3 text-[11.5px] font-bold border ${lead.status==='nouveau'?'bg-[#FF5A1F]/10 border-[#FF5A1F]/20 text-[#FF5A1F]': lead.status==='lu'?'bg-[#0A1931]/5 border-black/10':'bg-[#16A34A]/10 border-[#16A34A]/20 text-[#16A34A]'}`}>
                             <option value="nouveau">nouveau</option>
                             <option value="lu">lu</option>
                             <option value="contacté">contacté</option>
@@ -702,8 +665,10 @@ export default function App() {
             </div>
           </div>
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3 text-[11.5px] text-black/50 font-medium">
-            <span>{filteredLeads.length} / {leads.length} affichés · Stockage local sans API · Fichier de référence: abla-leads-db.json</span>
-            <span className="inline-flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-[#16A34A] animate-pulse" />Base connectée à window.__ABLA_DB__</span>
+            <span>{filteredLeads.length} / {leads.length} affichés</span>
+            {dataError
+              ? <span className="inline-flex items-center gap-2 text-red-600"><span className="w-2 h-2 rounded-full bg-red-600" />{dataError}</span>
+              : <span className="inline-flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-[#16A34A] animate-pulse" />Synchronisation temps réel active</span>}
           </div>
           {showDeleteModal && (
             <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 bg-[#0A1931]/70 backdrop-blur-sm">
@@ -719,26 +684,27 @@ export default function App() {
                 </div>
                 <p className="mt-4 text-[13px] leading-[1.6] text-black/70">
                   {deleteTarget
-                    ? "Cette suppression effacera définitivement ce lead de la base."
-                    : "Toutes les demandes seront supprimées de la base locale. Vous pouvez exporter avant si nécessaire."}
+                    ? "Cette suppression effacera définitivement ce lead de la base, sur tous vos appareils."
+                    : "Toutes les demandes et le compteur de visiteurs seront supprimés définitivement, sur tous vos appareils. Exportez une copie avant si nécessaire."}
                 </p>
                 <form onSubmit={confirmDelete} className="mt-5 space-y-4">
-                  <label className="block">
-                    <span className="text-[12.5px] font-bold text-[#0A1931]">Mot de passe de connexion</span>
-                    <input
-                      type="password"
-                      value={deletePassword}
-                      onChange={(e) => {
-                        setDeletePassword(e.target.value);
-                        setDeleteError("");
-                      }}
-                      placeholder="2024"
-                      className="mt-2 w-full h-[48px] rounded-[14px] bg-[#FFF8F0] border-2 border-black/[0.06] px-4 text-[14px] font-medium outline-none focus:border-[#FF5A1F]/40 focus:ring-2 focus:ring-[#FF5A1F]/20"
-                    />
-                  </label>
+                  {!deleteTarget && (
+                    <label className="block">
+                      <span className="text-[12.5px] font-bold text-[#0A1931]">Tapez <span className="font-mono">SUPPRIMER</span> pour confirmer</span>
+                      <input
+                        value={deleteConfirm}
+                        onChange={(e) => {
+                          setDeleteConfirm(e.target.value);
+                          setDeleteError("");
+                        }}
+                        placeholder="SUPPRIMER"
+                        className="mt-2 w-full h-[48px] rounded-[14px] bg-[#FFF8F0] border-2 border-black/[0.06] px-4 text-[14px] font-medium outline-none focus:border-[#FF5A1F]/40 focus:ring-2 focus:ring-[#FF5A1F]/20"
+                      />
+                    </label>
+                  )}
                   {deleteError && <div className="text-[12px] text-red-600 font-medium">{deleteError}</div>}
                   <div className="flex gap-3 pt-2">
-                    <button type="button" onClick={() => { setShowDeleteModal(false); setDeletePassword(""); setDeleteError(""); setDeleteTarget(null); }} className="flex-1 h-[46px] rounded-full border border-black/10 text-[13px] font-semibold text-black/70 hover:bg-black/[0.04] transition">Annuler</button>
+                    <button type="button" onClick={() => { setShowDeleteModal(false); setDeleteConfirm(""); setDeleteError(""); setDeleteTarget(null); }} className="flex-1 h-[46px] rounded-full border border-black/10 text-[13px] font-semibold text-black/70 hover:bg-black/[0.04] transition">Annuler</button>
                     <button type="submit" className="flex-1 h-[46px] rounded-full bg-red-600 text-white text-[13px] font-bold hover:bg-red-700 transition">Confirmer la suppression</button>
                   </div>
                 </form>
@@ -763,7 +729,7 @@ export default function App() {
                 <div className="rounded-[14px] bg-white border-2 border-black/[0.06] p-4"><div className="text-[11px] uppercase font-bold tracking-wide text-black/40 mb-2">Message complet</div><div className="leading-[1.6] whitespace-pre-wrap">{viewLead.message}</div></div>
               </div>
               <div className="mt-6 flex gap-2">
-                <button onClick={()=>{updateLeads(prev=>prev.map(x=>x.id===viewLead.id?{...x,status:"lu"}:x)); setViewLead(null)}} className="flex-1 h-11 rounded-full bg-[#0A1931] text-white font-bold text-[13px]">Marquer lu</button>
+                <button onClick={()=>{void changeStatus(viewLead.id, "lu"); setViewLead(null)}} className="flex-1 h-11 rounded-full bg-[#0A1931] text-white font-bold text-[13px]">Marquer lu</button>
                 <button onClick={()=>setViewLead(null)} className="flex-1 h-11 rounded-full border border-black/10 font-bold text-[13px]">Fermer</button>
               </div>
             </div>
@@ -1220,7 +1186,7 @@ export default function App() {
               ) : (
                 <form
                   onSubmit={(e) => {
-                    handleFormSubmit(e);
+                    void handleFormSubmit(e);
                   }}
                   className="space-y-5"
                 >
@@ -1294,9 +1260,10 @@ export default function App() {
                     </p>
                     <button
                       type="submit"
-                      className="btn-pulse inline-flex items-center gap-2 rounded-full bg-[#FF5A1F] text-white px-8 h-[52px] sans text-[15px] font-bold hover:bg-[#e84f1b] hover:shadow-[0_16px_32px_rgba(255,90,31,0.4)] transition"
+                      disabled={sending}
+                      className="btn-pulse inline-flex items-center gap-2 rounded-full bg-[#FF5A1F] text-white px-8 h-[52px] sans text-[15px] font-bold hover:bg-[#e84f1b] hover:shadow-[0_16px_32px_rgba(255,90,31,0.4)] transition disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Envoyer ma demande <ArrowUpRight className="w-5 h-5" />
+                      {sending ? "Envoi en cours…" : <>Envoyer ma demande <ArrowUpRight className="w-5 h-5" /></>}
                     </button>
                   </div>
                 </form>

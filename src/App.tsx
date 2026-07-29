@@ -146,14 +146,16 @@ function saveVisitorStats(stats: VisitorStats) {
   localStorage.setItem(VISITOR_STATS_KEY, JSON.stringify(stats));
 }
 
+let hasTrackedVisit = false;
+
 function trackVisit(): VisitorStats {
   if (typeof window === "undefined") return { total: 0, perDay: {} };
 
-  const sessionKey = "abla_visit_counted";
-  if (window.sessionStorage.getItem(sessionKey) === "1") {
+  if (hasTrackedVisit) {
     return loadVisitorStats();
   }
 
+  hasTrackedVisit = true;
   const today = new Date().toISOString().slice(0, 10);
   const stats = loadVisitorStats();
   const nextStats: VisitorStats = {
@@ -161,7 +163,6 @@ function trackVisit(): VisitorStats {
     perDay: { ...stats.perDay, [today]: (stats.perDay[today] || 0) + 1 },
   };
   saveVisitorStats(nextStats);
-  window.sessionStorage.setItem(sessionKey, "1");
   return nextStats;
 }
 

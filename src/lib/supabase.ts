@@ -24,6 +24,7 @@ if (!isSupabaseConfigured) {
  * La protection des données repose sur les politiques RLS définies dans
  * supabase/schema.sql, appliquées par Postgres — le rôle « anon » peut insérer
  * un lead mais pas en lire un seul.
+ * 
  */
 export const supabase = createClient(url ?? "", anonKey ?? "", {
   auth: {

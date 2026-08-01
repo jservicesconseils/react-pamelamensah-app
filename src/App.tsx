@@ -179,6 +179,23 @@ export default function App() {
     void trackVisit();
   }, [isAdminView]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const targetId = window.location.hash.replace(/^#/, "");
+    if (!targetId) return;
+
+    const target = document.getElementById(targetId);
+    if (!target) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      setActiveSection(targetId);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
   // Chargement initial des données une fois authentifiée.
   useEffect(() => {
     if (!isAdminView || !adminAuthed || !isSupabaseConfigured) return;
@@ -196,9 +213,17 @@ export default function App() {
     });
   }, [isAdminView, adminAuthed]);
 
+  const updateUrlHash = (id: string) => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.hash = id;
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  };
+
   const scrollTo = (id: string) => {
     setActiveSection(id);
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+    updateUrlHash(id);
     setToast(id === "contact" ? "Formulaire →" : null);
     setTimeout(() => setToast(null), 1800);
   };
@@ -207,6 +232,7 @@ export default function App() {
     setActiveSection(id);
     setToast(label);
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+    updateUrlHash(id);
     setTimeout(() => setToast(null), 1800);
   };
 
